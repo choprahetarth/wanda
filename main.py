@@ -8,6 +8,9 @@ from importlib.metadata import version
 from lib.prune import prune_wanda, prune_magnitude, prune_sparsegpt, prune_ablate, check_sparsity, find_layers
 from lib.eval import eval_ppl, eval_zero_shot
 
+
+device = torch.device("cuda:1")
+
 print('torch', version('torch'))
 print('transformers', version('transformers'))
 print('accelerate', version('accelerate'))
@@ -15,12 +18,12 @@ print('# of gpus: ', torch.cuda.device_count())
 
 def get_llm(model_name, cache_dir="llm_weights"):
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, 
+        model_name,
+        use_auth_token="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",
         torch_dtype=torch.float16, 
         cache_dir=cache_dir, 
         low_cpu_mem_usage=True, 
-        device_map="auto"
-    )
+        device_map=device)
 
     model.seqlen = model.config.max_position_embeddings 
     return model
@@ -43,37 +46,50 @@ def main():
     args = parser.parse_args()
 
     # Setting seeds for reproducibility
+    print("Setting seeds for reproducibility...")
     np.random.seed(args.seed)
     torch.random.manual_seed(args.seed)
+    print("Seeds set.")
 
     # Handling n:m sparsity
+    print("Handling n:m sparsity...")
     prune_n, prune_m = 0, 0
     if args.sparsity_type != "unstructured":
         assert args.sparsity_ratio == 0.5, "sparsity ratio must be 0.5 for structured N:M sparsity"
         prune_n, prune_m = map(int, args.sparsity_type.split(":"))
+    print(f"Prune_n: {prune_n}, Prune_m: {prune_m}")
 
     model_name = args.model.split("/")[-1]
-    print(f"loading llm model {args.model}")
+    print(f"Loading llm model {args.model}...")
     model = get_llm(args.model, args.cache_dir)
     model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
+    print("Model loaded and set to eval mode.")
+    
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(args.model,use_auth_token=True, use_fast=False)
+    print("Tokenizer loaded.")
 
-    device = torch.device("cuda:0")
+    print("Setting device...")
+    device = torch.device("cuda:1")
     if "30b" in args.model or "65b" in args.model: # for 30b and 65b we use device_map to load onto multiple A6000 GPUs, thus the processing here.
         device = model.hf_device_map["lm_head"]
-    print("use device ", device)
+    print(f"Using device {device}")
 
     if args.sparsity_ratio != 0:
-        print("pruning starts")
+        print("Pruning starts...")
         if args.prune_method == "wanda":
+            print("Pruning method: wanda")
             prune_wanda(args, model, tokenizer, device, prune_n=prune_n, prune_m=prune_m)
         elif args.prune_method == "magnitude":
+            print("Pruning method: magnitude")
             prune_magnitude(args, model, tokenizer, device, prune_n=prune_n, prune_m=prune_m)
         elif args.prune_method == "sparsegpt":
+            print("Pruning method: sparsegpt")
             prune_sparsegpt(args, model, tokenizer, device, prune_n=prune_n, prune_m=prune_m)
         elif "ablate" in args.prune_method:
+            print("Pruning method: ablate")
             prune_ablate(args, model, tokenizer, device, prune_n=prune_n, prune_m=prune_m)
-
+    print("Pruning completed.")
     ################################################################
     print("*"*30)
     sparsity_ratio = check_sparsity(model)
